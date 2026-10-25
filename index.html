@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Song Studio</title>
+<meta name="description" content="Song Studio: describe a song and it is composed, sung and played in your browser.">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Song Studio">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#14b8a6"/><path d="M7 18v-4M11 22V10M15 19v-6M19 24V8M23 20v-8M27 17v-2" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <div>
+        <h1>Song Studio</h1>
+        <p class="sub">Describe a song. It's composed, sung and played right in your browser.</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="card" id="describe">
+    <label for="desc" class="label">Song description</label>
+    <textarea id="desc" rows="4" maxlength="600" placeholder="e.g. A chill lo-fi song about rainy mornings with piano, about 2 minutes"></textarea>
+    <div class="chips" id="chips" aria-label="Examples"></div>
+    <div class="row gap">
+      <button id="gen" class="btn primary grow">Generate song</button>
+      <button id="regen" class="btn" disabled title="Same description, new variation">Regenerate</button>
+    </div>
+  </section>
+
+  <section class="card" id="player" aria-live="polite">
+    <div class="song-head">
+      <div>
+        <div class="song-title" id="title">No song yet</div>
+        <div class="song-meta" id="meta">Write a description and tap Generate.</div>
+      </div>
+      <button id="play" class="play" disabled aria-label="Play">
+        <svg viewBox="0 0 24 24" class="i-play"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" class="i-pause"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+      </button>
+    </div>
+    <canvas id="viz" height="120" aria-hidden="true"></canvas>
+    <div class="now"><span id="section">—</span><span id="time">0:00 / 0:00</span></div>
+    <div class="progress" id="progress" role="slider" aria-label="Song position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+      <div class="segs" id="segs"></div>
+      <div class="fill" id="fill"></div>
+      <div class="knob" id="knob"></div>
+    </div>
+    <div class="row gap wrap-row">
+      <button id="wav" class="btn grow" disabled>Download WAV</button>
+      <a id="wavlink" class="btn ghost hidden" download>Save file</a>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="card" id="settings">
+    <div class="card-head">
+      <h2>Interpreted settings</h2>
+      <button id="adjust" class="link-btn" aria-expanded="false">Adjust</button>
+    </div>
+    <dl class="readout" id="readout">
+      <div><dt>Genre</dt><dd id="r-genre">—</dd></div>
+      <div><dt>Mood</dt><dd id="r-mood">—</dd></div>
+      <div><dt>Tempo</dt><dd id="r-bpm">—</dd></div>
+      <div><dt>Key</dt><dd id="r-key">—</dd></div>
+      <div><dt>Length</dt><dd id="r-len">—</dd></div>
+      <div><dt>Chorus chords</dt><dd id="r-prog">—</dd></div>
+      <div class="wide"><dt>Structure</dt><dd id="r-struct">—</dd></div>
+      <div class="wide"><dt>Instruments</dt><dd id="r-layers">—</dd></div>
+    </dl>
+    <div id="overrides" class="overrides hidden">
+      <div class="grid2">
+        <label>Genre<select id="o-genre"></select></label>
+        <label>Mood<select id="o-mood"></select></label>
+        <label>Key<select id="o-root"></select></label>
+        <label>Scale<select id="o-scale"></select></label>
+        <label class="wide">Tempo <span id="o-bpm-v"></span> BPM<input type="range" id="o-bpm" min="55" max="180" step="1"></label>
+        <label class="wide">Length <span id="o-len-v"></span><input type="range" id="o-len" min="20" max="300" step="5"></label>
+      </div>
+      <div class="row gap">
+        <button id="apply" class="btn primary grow">Apply changes</button>
+        <button id="reset" class="btn">Use description</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="vocals">
+    <div class="card-head">
+      <h2>Vocals</h2>
+      <label class="switch"><input type="checkbox" id="v-on" checked><span></span><em>Sing</em></label>
+    </div>
+    <div class="grid2">
+      <label>Voice<select id="v-type">
+        <option value="fhigh">Female, higher</option>
+        <option value="flow">Female, lower</option>
+        <option value="mhigh" selected>Male, higher</option>
+        <option value="mlow">Male, lower</option>
+      </select></label>
+      <label>Backing vocals<select id="v-style">
+        <option value="harmony" selected>Doubles + harmony in choruses</option>
+        <option value="double">Doubled all the way</option>
+        <option value="solo">Lead voice only</option>
+      </select></label>
+      <label>Vocal volume<input type="range" id="v-vol" min="0" max="1.6" step="0.05" value="1"></label>
+    </div>
+    <p class="hint v-status" id="v-status" aria-live="polite"></p>
+    <label for="lyrics" class="label">Lyrics <span class="hint" id="lyr-src"></span></label>
+    <textarea id="lyrics" rows="12" spellcheck="true" placeholder="Lyrics appear here after you generate. You can edit them or paste your own using [Verse 1], [Chorus], [Verse 2] and [Bridge] headings, or blank lines between stanzas."></textarea>
+    <div class="row gap">
+      <button id="lyr-apply" class="btn grow" disabled>Sing these lyrics</button>
+      <button id="lyr-new" class="btn" disabled>Write new lyrics</button>
+    </div>
+    <p class="note">The singer is a vocal-tract model computed in your browser: a breathy glottal source shaped by moving formants, with real consonants, slides between notes, vibrato and natural wobble. It follows the melody note for note. It's free and works offline, and it's much more human than a vocoder, but it still won't pass for a recorded singer. Every voice, style and lyric change is included in the WAV download.</p>
+  </section>
+
+  <footer class="foot">Everything runs on your device with the Web Audio API. Nothing is uploaded.</footer>
+</main>
+<script src="js/parser.js"></script>
+<script src="js/composer.js"></script>
+<script src="js/lyrics.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/synth.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
