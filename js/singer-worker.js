@@ -31,14 +31,16 @@ async function fetchWithProgress(url, onProgress) {
   try { cache = await caches.open(MODEL_CACHE); const hit = await cache.match(url); if (hit) { onProgress(1, 1, true); return await hit.arrayBuffer(); } } catch (e) { cache = null; }
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('Could not download the singer (' + resp.status + ')');
-  const total = Number(resp.headers.get('content-length')) || 87110542;
+  // when the server compresses the file, content-length is the compressed size, not the bytes we count
+  const enc = resp.headers.get('content-encoding');
+  const total = (!enc || enc === 'identity') && Number(resp.headers.get('content-length')) || 87110542;
   let buf;
   if (resp.body && resp.body.getReader) {
     const reader = resp.body.getReader(); const parts = []; let got = 0, lastT = 0;
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
       parts.push(value); got += value.length;
-      const now = Date.now(); if (now - lastT > 150) { lastT = now; onProgress(got, total, false); }
+      const now = Date.now(); if (now - lastT > 150) { lastT = now; onProgress(Math.min(got, total), total, false); }
     }
     buf = new Uint8Array(got); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
     buf = buf.buffer;

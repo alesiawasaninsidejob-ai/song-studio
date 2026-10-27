@@ -3,7 +3,7 @@
    Service worker: app files are network-first (always the newest version online, cache offline).
    Big, never-changing files (runtime, voices) are cache-first. The voice model itself is cached
    by the singer worker, so it is not stored twice. */
-const CACHE = 'song-studio-v3';
+const CACHE = 'song-studio-v4';
 const STATIC = 'song-studio-static-v1';
 const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/parser.js', 'js/composer.js', 'js/lyrics.js', 'js/voice.js', 'js/voice-worker.js', 'js/sing-plan.js', 'js/singer-worker.js', 'js/synth.js', 'js/app.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', (e) => {
