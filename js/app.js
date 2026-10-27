@@ -16,12 +16,14 @@
     'Melancholy classical piano waltz in A minor',
     'Driving rock song about breaking free'
   ];
+  // neural voices (Kokoro-82M, Apache-2.0) and the song key centre each one sings around
   const VOICES = {
-    fhigh: { center: 66, formantShift: 1.17, breathiness: 0.2 },
-    flow: { center: 63, formantShift: 1.1, breathiness: 0.18 },
-    mhigh: { center: 58, formantShift: 1.0, breathiness: 0.15 },
-    mlow: { center: 52, formantShift: 0.92, breathiness: 0.13 }
+    fhigh: { voice: 'af_heart', center: 65, formantShift: 1.17, breathiness: 0.2 },
+    flow: { voice: 'af_bella', center: 62, formantShift: 1.1, breathiness: 0.18 },
+    mhigh: { voice: 'am_michael', center: 57, formantShift: 1.0, breathiness: 0.15 },
+    mlow: { voice: 'am_fenrir', center: 52, formantShift: 0.92, breathiness: 0.13 }
   };
+  const BEDS = { soft: 0.38, some: 0.2, off: 0 };
 
   const state = { text: '', variation: 0, base: null, overrides: {}, params: null, song: null, lyrics: null, lyricsCustom: false, vocals: [], lyricVariation: 0, wavUrl: null, vocalTrack: null, trackPromise: null, trackToken: 0 };
   const player = new S.Player();
@@ -49,24 +51,75 @@
   $('v-type').value = store.get('vType', 'mhigh');
   $('v-vol').value = store.get('vVol', 1);
   $('v-style').value = store.get('vStyle', 'harmony');
+  $('v-bed').value = store.get('vBed', 'soft');
 
   function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
   function fmt(sec) { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); }
   function setStatus(msg) { $('status').textContent = msg || ''; }
   function vocalOpts() {
     const v = VOICES[$('v-type').value] || VOICES.mhigh;
-    return { vocals: $('v-on').checked, vocalVolume: parseFloat($('v-vol').value), formantShift: v.formantShift, breathiness: v.breathiness, center: v.center, style: $('v-style').value };
+    return { vocals: $('v-on').checked, vocalVolume: parseFloat($('v-vol').value), formantShift: v.formantShift, breathiness: v.breathiness, center: v.center, style: $('v-style').value, voice: v.voice, duck: BEDS[$('v-bed').value] || 0 };
   }
   function trackOpts() {
     const vo = vocalOpts(), p = state.params, s = state.song;
     return {
-      sr: 24000, formantShift: vo.formantShift, breathiness: vo.breathiness, style: vo.style,
+      sr: 24000, voice: vo.voice, formantShift: vo.formantShift, breathiness: vo.breathiness, style: vo.style,
       seed: (p.seed ^ (state.lyricVariation * 2654435761)) >>> 0, durationSec: s.totalSec,
       song: { root: p.root, scaleSteps: P.SCALES[p.scale].steps, chords: s.chords.map(c => ({ pcs: c.pcs })), barSec: s.barSec, lift: s.lift }
     };
   }
 
-  // ---------- singer (Web Worker, with a main-thread fallback) ----------
+  // ---------- singers ----------
+  // 1) neural singer: Kokoro voice model in a module worker (human voice, needs a one-time download)
+  // 2) fallback: the older formant singer, only if the neural one can't run on this device
+  const neural = { worker: null, failed: false, ready: false, jobs: new Map(), id: 0, loadMsg: '' };
+  function neuralWorker() {
+    if (neural.failed) return null;
+    if (neural.worker) return neural.worker;
+    try {
+      const w = new Worker('js/singer-worker.js', { type: 'module' });
+      w.onmessage = (e) => onNeural(e.data || {});
+      w.onerror = (e) => { if (e && e.preventDefault) e.preventDefault(); neuralFail('The neural singer could not start on this browser.'); };
+      neural.worker = w;
+      w.postMessage({ type: 'load' });
+    } catch (e) { neural.failed = true; return null; }
+    return neural.worker;
+  }
+  function neuralFail(msg) {
+    neural.failed = true; neural.lastError = msg;
+    try { neural.worker && neural.worker.terminate(); } catch (e) { /* ignore */ }
+    neural.worker = null;
+    const jobs = Array.from(neural.jobs.values()); neural.jobs.clear();
+    jobs.forEach(j => j.fallback());
+  }
+  function mb(x) { return (x / 1048576).toFixed(0); }
+  function onNeural(d) {
+    if (d.type === 'load') {
+      if (d.stage === 'init') neural.loadMsg = 'Warming up the singer…';
+      else if (d.cached) neural.loadMsg = 'Loading the singer…';
+      else neural.loadMsg = 'Downloading the singer voice (one time, ' + mb(d.total) + ' MB): ' + Math.round(100 * d.got / Math.max(1, d.total)) + '%';
+      setBar(d.stage === 'init' ? 1 : d.got / Math.max(1, d.total));
+      if (neural.jobs.size) setVoiceStatus(neural.loadMsg);
+      return;
+    }
+    if (d.type === 'ready') { neural.ready = true; neural.loadMsg = ''; if (!neural.jobs.size) { setVoiceStatus(state.vocalTrack ? $('v-status').textContent : ''); setBar(0); } return; }
+    if (d.type === 'error') {
+      if (!d.id || !neural.jobs.has(d.id)) { if (!neural.ready) neuralFail(d.error); return; }
+      const j = neural.jobs.get(d.id); neural.jobs.delete(d.id); j.fallback(); return;
+    }
+    const j = neural.jobs.get(d.id); if (!j) return;
+    if (d.type === 'progress') { j.onProgress && j.onProgress(d.progress, d.harmony); return; }
+    if (d.type === 'partial' || d.type === 'done') {
+      const track = { sr: d.sr, L: d.L, R: d.R, env: d.env, durationSec: d.durationSec, partial: d.type !== 'done', upto: d.upto };
+      if (d.type === 'done') { neural.jobs.delete(d.id); j.resolve(track); }
+      else j.onPartial && j.onPartial(track);
+    }
+  }
+  // Start fetching the voice early (a little later on a first visit, which reloads once for multi-threading).
+  let coiPending = false;
+  try { coiPending = 'serviceWorker' in navigator && location.protocol !== 'file:' && !window.crossOriginIsolated && !sessionStorage.getItem('ss-coi-reload'); } catch (e) { /* ignore */ }
+  if ($('v-on').checked) setTimeout(() => { if (!neural.worker) neuralWorker(); }, coiPending ? 3000 : 600);
+
   let worker = null, jobId = 0;
   const pending = new Map();
   function getWorker() {
@@ -80,7 +133,7 @@
     }
     return worker;
   }
-  function renderTrack(events, opts) {
+  function renderFormant(events, opts) {
     const local = () => window.SongVoice.renderVocalTrack(events, opts);
     const w = getWorker();
     if (!w) return new Promise((res, rej) => setTimeout(() => { try { res(local()); } catch (e) { rej(e); } }, 0));
@@ -90,6 +143,21 @@
       w.postMessage({ id, events, opts });
     });
   }
+  // render the vocal track; onPartial gets growing tracks while the neural singer records
+  function renderTrack(events, opts, cb) {
+    cb = cb || {};
+    const w = neuralWorker();
+    if (!w) { cb.onFallback && cb.onFallback(); return renderFormant(events, opts); }
+    return new Promise((resolve, reject) => {
+      const id = ++neural.id;
+      // only the newest job matters
+      for (const [k, j] of neural.jobs) { neural.jobs.delete(k); j.cancelled = true; }
+      neural.jobs.set(id, { resolve, reject, onPartial: cb.onPartial, onProgress: cb.onProgress,
+        fallback: () => { cb.onFallback && cb.onFallback(); renderFormant(events, opts).then(resolve, reject); } });
+      w.postMessage({ type: 'render', id, events, opts });
+    });
+  }
+  function setBar(f) { const b = $('v-bar'); if (!b) return; b.parentNode.hidden = !(f > 0 && f < 1); b.style.width = Math.round(Math.max(0, Math.min(1, f)) * 100) + '%'; }
   function setVoiceStatus(msg) { $('v-status').textContent = msg || ''; }
 
   // ---------- generation ----------
@@ -140,14 +208,47 @@
     if (vo.vocals && state.vocals.length && !state.vocalTrack && !state.trackPromise) {
       const token = state.trackToken;
       const t0 = performance.now();
-      setVoiceStatus('Singer is warming up…');
-      state.trackPromise = renderTrack(state.vocals, trackOpts()).then((t) => {
+      setVoiceStatus(neural.ready ? 'Recording the vocals…' : (neural.loadMsg || 'Getting the singer ready…'));
+      state.trackPromise = renderTrack(state.vocals, trackOpts(), {
+        onPartial: (t) => { if (token !== state.trackToken) return; state.vocalTrack = t; player.setVocalTrack(t); maybeStartWaiting(t.upto || 0, false); },
+        onProgress: (f, harm) => { if (token !== state.trackToken) return; if (harm) maybeStartWaiting(1e9, true); setBar(f); setVoiceStatus((harm ? 'Recording the harmonies… ' : 'Recording the vocals… ') + Math.round(f * 100) + '%'); },
+        onFallback: () => { if (token === state.trackToken) { setVoiceStatus('Using the basic singer on this device…'); maybeStartWaiting(1e9, true); } }
+      }).then((t) => {
         if (token !== state.trackToken) return null;
-        state.vocalTrack = t; player.setVocalTrack(t);
-        setVoiceStatus('Vocals ready (' + ((performance.now() - t0) / 1000).toFixed(1) + ' s).');
+        state.vocalTrack = t; player.setVocalTrack(t); setBar(0); maybeStartWaiting(1e9, true);
+        const basic = !t.env;
+        setVoiceStatus((basic ? 'Basic vocals ready (' : 'Vocals ready (') + ((performance.now() - t0) / 1000).toFixed(1) + ' s).' + (basic && neural.lastError ? ' The neural singer could not run here: ' + neural.lastError : ''));
         return t;
-      }).catch((e) => { if (token === state.trackToken) setVoiceStatus('Could not render the vocals: ' + (e && e.message ? e.message : e)); return null; });
+      }).catch((e) => { if (token === state.trackToken) { setBar(0); maybeStartWaiting(1e9, true); setVoiceStatus('Could not render the vocals: ' + (e && e.message ? e.message : e)); } return null; });
     } else if (!vo.vocals) setVoiceStatus('');
+  }
+
+  // Start the song from the top. While the singer is still recording, wait until it is far enough
+  // ahead that the vocals will not fall behind the music (so the first verse is never silent).
+  function markPlaying() { $('play').classList.add('playing'); $('play').setAttribute('aria-label', 'Pause'); }
+  function playFromTop() {
+    state.waitPlay = null;
+    if (state.trackPromise && state.vocals.length && !(state.vocalTrack && !state.vocalTrack.partial) && !neural.failed) {
+      state.waitPlay = { token: state.trackToken, t0: performance.now() };
+      setStatus('Starting as soon as the singer is far enough ahead…');
+      return;
+    }
+    player.play(0); markPlaying();
+  }
+  function maybeStartWaiting(upto, final) {
+    const w = state.waitPlay;
+    if (!w || w.token !== state.trackToken) return;
+    const last = state.vocals[state.vocals.length - 1];
+    const leadEnd = last ? last.t + (last.d || 0) : 0;
+    const el = (performance.now() - w.t0) / 1000;
+    const v0 = state.vocals[0].t;
+    const rate = Math.max(0, upto - v0) / Math.max(0.5, el); // song seconds sung per real second
+    // playback reaches the last note at leadEnd; the singer needs (leadEnd - upto) / rate, plus a safety margin
+    const need = rate > 0 ? 1.25 * (leadEnd - upto) / rate + 3 : Infinity;
+    if (final || upto >= leadEnd - 0.5 || (upto > v0 + 2 && leadEnd >= need)) {
+      state.waitPlay = null; setStatus('');
+      player.play(0); markPlaying();
+    }
   }
 
   function reloadKeepingPosition(rerender) {
@@ -217,6 +318,7 @@
   async function togglePlay() {
     if (!state.song) return;
     await player.unlock();
+    if (state.waitPlay) { state.waitPlay = null; setStatus(""); }
     if (player.state === 'playing') { player.pause(); $('play').classList.remove('playing'); $('play').setAttribute('aria-label', 'Play'); }
     else { player.play(); $('play').classList.add('playing'); $('play').setAttribute('aria-label', 'Pause'); }
   }
@@ -277,7 +379,7 @@
     const t0 = performance.now();
     try {
       let track = state.vocalTrack;
-      if (state.vocals.length && !track && state.trackPromise) { btn.textContent = 'Preparing vocals…'; track = await state.trackPromise; }
+      if (state.vocals.length && (!track || track.partial) && state.trackPromise) { btn.textContent = 'Finishing the vocals…'; track = (await state.trackPromise) || track; }
       const buf = await S.renderOffline(state.song, state.vocals, Object.assign(vocalOpts(), { vocalTrack: track }), (f) => { btn.textContent = 'Rendering… ' + Math.round(f * 100) + '%'; });
       const chans = []; for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
       const wav = S.encodeWav(chans, buf.sampleRate, true);
@@ -306,7 +408,7 @@
     player.stop();
     generate();
     setStatus('');
-    player.play(0); $('play').classList.add('playing'); $('play').setAttribute('aria-label', 'Pause');
+    playFromTop();
   });
   $('regen').addEventListener('click', async () => {
     if (!state.text) return;
@@ -314,8 +416,8 @@
     state.variation++;
     player.stop();
     generate();
-    player.play(0); $('play').classList.add('playing');
     setStatus('Variation ' + (state.variation + 1) + ' of the same description.');
+    playFromTop();
   });
   $('play').addEventListener('click', togglePlay);
   $('wav').addEventListener('click', downloadWav);
@@ -338,18 +440,20 @@
     if (+$('o-len').value !== (state.base && state.base.lengthSec)) o.lengthSec = +$('o-len').value;
     state.overrides = o;
     player.stop(); generate();
-    player.play(0); $('play').classList.add('playing');
     setStatus('Applied your changes.');
+    playFromTop();
   });
   $('reset').addEventListener('click', async () => {
-    state.overrides = {}; await player.unlock(); player.stop(); generate(); player.play(0); $('play').classList.add('playing');
+    state.overrides = {}; await player.unlock(); player.stop(); generate();
     setStatus('Back to the settings read from your description.');
+    playFromTop();
   });
   $('v-on').addEventListener('change', () => { store.set('vOn', $('v-on').checked); reloadKeepingPosition(); if (state.song) renderReadout(); });
   $('v-type').addEventListener('change', () => { store.set('vType', $('v-type').value); reloadKeepingPosition(); });
   let volTimer = null;
   $('v-vol').addEventListener('input', () => { store.set('vVol', +$('v-vol').value); clearTimeout(volTimer); volTimer = setTimeout(() => reloadKeepingPosition(false), 250); });
   $('v-style').addEventListener('change', () => { store.set('vStyle', $('v-style').value); reloadKeepingPosition(); });
+  $('v-bed').addEventListener('change', () => { store.set('vBed', $('v-bed').value); reloadKeepingPosition(false); });
   $('lyrics').addEventListener('input', () => { state.lyricsCustom = true; updateLyricSource(); });
   $('lyr-apply').addEventListener('click', async () => {
     const parsed = L.parseLyricsText($('lyrics').value);
@@ -374,7 +478,20 @@
 
   // ---------- service worker ----------
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => { /* ignore */ }); });
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        // The service worker adds the headers that let the singer use several CPU threads.
+        // The first visit is not isolated yet, so reload once (before any song is playing).
+        const tryReload = () => {
+          if (window.crossOriginIsolated || !navigator.serviceWorker.controller) return;
+          if (player.state === 'playing' || neural.jobs.size || state.song) return;
+          try { if (sessionStorage.getItem('ss-coi-reload')) return; sessionStorage.setItem('ss-coi-reload', '1'); } catch (e) { return; }
+          location.reload();
+        };
+        if (navigator.serviceWorker.controller) tryReload();
+        else navigator.serviceWorker.addEventListener('controllerchange', tryReload, { once: true });
+      }).catch(() => { /* ignore */ });
+    });
   }
   window.__songStudio = { state, player };
 })();

@@ -157,20 +157,23 @@
     g.vib = ctx.createOscillator(); g.vib.frequency.value = 5.3; g.vib.start(0); g.sources.push(g.vib);
     g.vibVoice = ctx.createOscillator(); g.vibVoice.frequency.value = 5.6; g.vibVoice.start(0); g.sources.push(g.vibVoice);
 
-    // vocal bus: highpass -> compressor -> gain -> pan center, sends, chorus double
+    // vocal bus: clean, upfront vocal chain. It bypasses the lo-fi tape filter so words stay clear.
     if (opts.vocals) {
       const vin = ctx.createGain();
-      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 110;
-      const pres = ctx.createBiquadFilter(); pres.type = 'peaking'; pres.frequency.value = 3000; pres.Q.value = 0.8; pres.gain.value = 3;
-      const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -22; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.12; comp.knee.value = 6;
-      const vol = ctx.createGain(); vol.gain.value = opts.vocalVolume === undefined ? 1 : opts.vocalVolume;
-      const vlp = ctx.createBiquadFilter(); vlp.type = 'lowpass'; vlp.frequency.value = 7000; vlp.Q.value = 0.5;
-      vin.connect(hp); hp.connect(vlp); vlp.connect(pres); pres.connect(comp); comp.connect(vol);
-      vol.connect(g.mix);
-      const rs = ctx.createGain(); rs.gain.value = Math.max(0.28, R * 1.2); vol.connect(rs); rs.connect(g.reverbIn);
-      const ds = ctx.createGain(); ds.gain.value = Math.max(0.1, D * 0.8); vol.connect(ds); ds.connect(g.delayIn);
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 95; hp.Q.value = 0.7;
+      const mud = ctx.createBiquadFilter(); mud.type = 'peaking'; mud.frequency.value = 320; mud.Q.value = 1.0; mud.gain.value = -2.5;
+      const box = ctx.createBiquadFilter(); box.type = 'peaking'; box.frequency.value = 900; box.Q.value = 1.4; box.gain.value = -1.5;
+      const pres = ctx.createBiquadFilter(); pres.type = 'peaking'; pres.frequency.value = 3200; pres.Q.value = 0.9; pres.gain.value = 3;
+      const air = ctx.createBiquadFilter(); air.type = 'highshelf'; air.frequency.value = 8500; air.gain.value = 2.5;
+      const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 3.5; comp.attack.value = 0.004; comp.release.value = 0.14; comp.knee.value = 8;
+      const vol = ctx.createGain(); vol.gain.value = (opts.vocalVolume === undefined ? 1 : opts.vocalVolume) * 0.95;
+      vin.connect(hp); hp.connect(mud); mud.connect(box); box.connect(pres); pres.connect(air); air.connect(comp); comp.connect(vol);
+      vol.connect(glue);
+      const rs = ctx.createGain(); rs.gain.value = Math.min(0.32, Math.max(0.16, R * 0.75)); vol.connect(rs); rs.connect(g.reverbIn);
+      const ds = ctx.createGain(); ds.gain.value = Math.min(0.14, Math.max(0.05, D * 0.5)); vol.connect(ds); ds.connect(g.delayIn);
       g.bus.vocal = vin;
     }
+    g.mixBase = g.mix.gain.value;
 
     // ambience: vinyl crackle and rain beds
     const dur = song.totalSec + 1;
@@ -523,6 +526,19 @@
 
   // ---------- singing voice (formant synthesis) ----------
   // ---------- vocal track (rendered by SongVoice) ----------
+  // softer instrument bed while words are sung ("ducking"), driven by the vocal envelope
+  function duckLevel(opts, pos) {
+    const t = opts && opts.vocals && opts.vocalTrack, depth = (opts && opts.duck) || 0;
+    if (!t || !t.env || !depth) return 1;
+    const i = Math.floor(pos * 20);
+    const e = i >= 0 && i < t.env.length ? t.env[i] : 0;
+    return 1 - depth * e;
+  }
+  function duckAt(g, opts, pos, when) {
+    if (!g || !g.mix) return;
+    const v = g.mixBase * duckLevel(opts, pos);
+    try { g.mix.gain.setTargetAtTime(v, when, 0.07); } catch (e) { /* ignore */ }
+  }
   function vocalBuffer(ctx, track) {
     if (track._ab && track._abLen === track.L.length) return track._ab;
     const b = ctx.createBuffer(2, track.L.length, track.sr);
@@ -588,8 +604,8 @@
       this.opts = Object.assign({}, this.opts, { vocalTrack: track });
       const g = this.graph;
       if (this.state === 'playing' && g && this.opts.vocals) {
-        if (g.vocalSrc) { try { g.vocalSrc.stop(); } catch (e) { /* ignore */ } g.vocalSrc = null; }
-        const when = this.ctx.currentTime + 0.03;
+        const when = this.ctx.currentTime + 0.05;
+        if (g.vocalSrc) { try { g.vocalSrc.stop(when); } catch (e) { /* ignore */ } g.vocalSrc = null; }
         startVocal(g, this.ctx, track, when, this.offset + (when - this.startTime));
       }
     }
@@ -625,6 +641,7 @@
         this.idx++;
       }
       const pos = this.position();
+      duckAt(g, this.opts, pos + 0.08, now + 0.05);
       if (this.onTick) this.onTick(pos);
       if (pos >= this.song.totalSec) { this.stop(); this.offset = 0; if (this.onEnd) this.onEnd(); }
     }
@@ -648,6 +665,7 @@
   }
 
   // ---------- offline render ----------
+  function total0(song) { return song.totalSec; }
   function renderOffline(song, vocals, opts, onProgress) {
     if (!OAC) return Promise.reject(new Error('Offline rendering is not supported in this browser.'));
     const sr = (opts && opts.sampleRate) || 44100;
@@ -656,7 +674,15 @@
     try { ctx = new OAC(2, len, sr); } catch (e) { ctx = new OAC(2, len, 44100); }
     const g = createGraph(ctx, song, Object.assign({}, opts));
     if (g.ambience) g.ambience.forEach(s => { s.start(0); s.stop(song.totalSec); });
-    if (opts && opts.vocals && opts.vocalTrack) startVocal(g, ctx, opts.vocalTrack, 0, 0);
+    if (opts && opts.vocals && opts.vocalTrack) {
+      startVocal(g, ctx, opts.vocalTrack, 0, 0);
+      if (opts.duck && opts.vocalTrack.env) {
+        const n = Math.ceil(total0(song) * 20), curve = new Float32Array(Math.max(2, n));
+        let v = 1;
+        for (let i = 0; i < curve.length; i++) { const target = duckLevel(opts, (i + 1.6) / 20); v += (target - v) * 0.5; curve[i] = g.mixBase * v; }
+        try { g.mix.gain.setValueCurveAtTime(curve, 0, song.totalSec); } catch (e) { /* ignore */ }
+      }
+    }
     const events = buildEvents(song, vocals, opts);
     const total = song.totalSec;
     const CHUNK = 4;

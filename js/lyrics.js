@@ -233,14 +233,14 @@
   function syllabify(line) {
     const out = [];
     const words = String(line || '').split(/\s+/).filter(Boolean);
-    for (const word of words) {
+    words.forEach((word, wi) => {
       const parts = splitWord(word);
       parts.forEach((s, i) => {
         const on = (s.match(/^[^aeiouy]+/) || [''])[0];
         const coda = (s.match(/[^aeiouy]+$/) || [''])[0];
-        out.push({ text: s, vowel: vowelOf(s), onset: consonantClass(on), coda: coda && !/^(e|r|w|y|gh|h)$/.test(coda) ? consonantClass(coda) : null, wordStart: i === 0, wordEnd: i === parts.length - 1, word: word.toLowerCase().replace(/[^a-z']/g, '').replace(/'/g, '') });
+        out.push({ text: s, vowel: vowelOf(s), onset: consonantClass(on), coda: coda && !/^(e|r|w|y|gh|h)$/.test(coda) ? consonantClass(coda) : null, wi, wordStart: i === 0, wordEnd: i === parts.length - 1, word: word.toLowerCase().replace(/[^a-z']/g, '').replace(/'/g, ''), raw: word.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z'-]/g, '') });
       });
-    }
+    });
     return out;
   }
   function countSyllables(line) { return syllabify(line).length; }
@@ -293,7 +293,7 @@
         // squeeze: merge the extra syllables into the last ones
         const keep = syls.slice(0, notes.length - 1);
         const rest = syls.slice(notes.length - 1);
-        keep.push(Object.assign({}, rest[0], { text: rest.map(s => s.text).join(''), coda: rest[rest.length - 1].coda }));
+        keep.push(Object.assign({}, rest[0], { text: rest.map(s => s.text).join(''), coda: rest[rest.length - 1].coda, wiEnd: rest[rest.length - 1].wi, wordEnd: true }));
         syls = keep;
       }
       // distribute syllables over notes; extra notes become melisma (legato vowel)
@@ -307,7 +307,7 @@
         let d = notes[i].d;
         const nextSame = next && Math.min(S - 1, Math.floor((i + 1) * S / N)) === sIdx;
         if (nextSame) d = Math.max(d, next.t - notes[i].t + 0.02);
-        out.push({ t: notes[i].t, d, m: notes[i].m, syl, legato: !first, lastOfSyl: !nextSame, sec: sec.name, secIndex: si, final: !!sec.final });
+        out.push({ t: notes[i].t, d, m: notes[i].m, syl, legato: !first, lastOfSyl: !nextSame, sec: sec.name, secIndex: si, final: !!sec.final, phrase: key, line });
       }
     }
     out.sort((a, b) => a.t - b.t);

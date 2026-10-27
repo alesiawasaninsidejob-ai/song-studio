@@ -100,29 +100,35 @@
     </div>
     <div class="grid2">
       <label>Voice<select id="v-type">
-        <option value="fhigh">Female, higher</option>
-        <option value="flow">Female, lower</option>
-        <option value="mhigh" selected>Male, higher</option>
-        <option value="mlow">Male, lower</option>
+        <option value="fhigh">Female, warm (Heart)</option>
+        <option value="flow">Female, low and soft (Bella)</option>
+        <option value="mhigh" selected>Male, smooth (Michael)</option>
+        <option value="mlow">Male, deep (Fenrir)</option>
       </select></label>
       <label>Backing vocals<select id="v-style">
         <option value="harmony" selected>Doubles + harmony in choruses</option>
         <option value="double">Doubled all the way</option>
         <option value="solo">Lead voice only</option>
       </select></label>
+      <label>Music under the vocals<select id="v-bed">
+        <option value="soft" selected>Softer, so the words come first</option>
+        <option value="some">A little softer</option>
+        <option value="off">Full volume</option>
+      </select></label>
       <label>Vocal volume<input type="range" id="v-vol" min="0" max="1.6" step="0.05" value="1"></label>
     </div>
     <p class="hint v-status" id="v-status" aria-live="polite"></p>
+    <div class="v-progress" hidden><i id="v-bar"></i></div>
     <label for="lyrics" class="label">Lyrics <span class="hint" id="lyr-src"></span></label>
     <textarea id="lyrics" rows="12" spellcheck="true" placeholder="Lyrics appear here after you generate. You can edit them or paste your own using [Verse 1], [Chorus], [Verse 2] and [Bridge] headings, or blank lines between stanzas."></textarea>
     <div class="row gap">
       <button id="lyr-apply" class="btn grow" disabled>Sing these lyrics</button>
       <button id="lyr-new" class="btn" disabled>Write new lyrics</button>
     </div>
-    <p class="note">The singer is a vocal-tract model computed in your browser: a breathy glottal source shaped by moving formants, with real consonants, slides between notes, vibrato and natural wobble. It follows the melody note for note. It's free and works offline, and it's much more human than a vocoder, but it still won't pass for a recorded singer. Every voice, style and lyric change is included in the WAV download.</p>
+    <p class="note">The singer is a real neural voice model (Kokoro, open source and free) that runs right on your device. No account or internet service is needed. It sings your words on the melody with natural slides, vibrato and breath. The first time, the voice downloads once (about 90 MB, Wi-Fi recommended). After that it's saved and works offline. The vocals record in the background while the song plays, and every voice, style and lyric change is in the WAV download.</p>
   </section>
 
-  <footer class="foot">Everything runs on your device with the Web Audio API. Nothing is uploaded.</footer>
+  <footer class="foot">Everything runs on your device. Nothing is uploaded. Singing voice: <a href="https://huggingface.co/hexgrad/Kokoro-82M" target="_blank" rel="noopener">Kokoro-82M</a> (Apache-2.0) · <a href="CREDITS.md" target="_blank" rel="noopener">Credits</a></footer>
 </main>
 <script src="js/parser.js"></script>
 <script src="js/composer.js"></script>

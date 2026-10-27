@@ -62,4 +62,7 @@ input[type=range]{width:100%;accent-color:var(--accent);height:28px}
 .note{color:var(--muted);font-size:.82rem;margin:12px 0 0}
 .foot{color:var(--muted);font-size:.8rem;text-align:center;margin-top:8px}
 @media (max-width:520px){.readout{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
-.v-status{margin:4px 0 10px;font-size:.85rem;min-height:1.1em}
+.v-status{margin:4px 0 6px;font-size:.85rem;min-height:1.1em}
+.v-progress{height:4px;border-radius:4px;background:rgba(127,127,127,.25);overflow:hidden;margin:0 0 10px}
+.v-progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .25s}
+.foot a{color:inherit}
